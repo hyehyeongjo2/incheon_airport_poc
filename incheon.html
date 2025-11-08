@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>test</title>
+    <link rel="stylesheet" href="sample-georef-style.css" />
+  </head>
+  <body>
+    <div class="contrast-mode-container">
+      <button id="contrast-toggle-btn">통행복잡도 ON</button>
+      <button id="tag-clear-btn">태크 끄기</button>
+      <button id="gps-btn">gps 시작</button>
+    </div>
+    <div class="container" id="zoom-container">
+      <div id="zoom-content">
+        <div class="route-simulation-container">
+          <button class="startPoi-button" onclick="setStartPoi()">
+            출발지 POI
+          </button>
+          <button class="endPoi-button" onclick="setEndPoi()">
+            도착지 POI
+          </button>
+          <button
+            class="simulation-start-button"
+            onclick="startRouteSimulation()"
+          >
+            길찾기 시작
+          </button>
+        </div>
+        <div class="poi-scale-container">
+          <button class="plus-button" onclick="increasePoiScale()">➕</button>
+          <div class="scale">1</div>
+          <button class="minus-button" onclick="decreasePoiScale()">➖</button>
+        </div>
+        <div class="poi-container">
+          <div class="building-list-container">
+            <div class="title">Building</div>
+            <div class="building-list-content"></div>
+          </div>
+          <div class="floor-list-container">
+            <div class="title">Floor</div>
+            <div class="floor-list-content"></div>
+          </div>
+          <div class="poi-list-container">
+            <div class="title">POI</div>
+            <div class="poi-list-content"></div>
+          </div>
+        </div>
+        <div class="data-container">
+          <div id="map" class="map"></div>
+          <div class="poi-data-container">
+            <div class="title-container">
+              <div class="title">선택된 POI</div>
+            </div>
+
+            <div class="poi-data-content"></div>
+          </div>
+          <div class="route-data-container">
+            <div class="title">길찾기 경로</div>
+            <div class="route-data-content"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+
+  <script
+    type="text/javascript"
+    src="https://api-assets.dabeeomaps.com/upload/library/dabeeomaps-4.0-pre-release.js"
+  ></script>
+
+  <script>
+    const dabeeoMaps = new dabeeo.Maps();
+    let mapData = null;
+    let map = null;
+    const mapContainer = document.getElementById("map");
+
+    let markers = [];
+    let isTrafficComplexityOn = true;
+    let selectedBuildingId = "";
+    let selectedFloorId = "";
+    let selectedPoiId = "";
+    let defaultLanguage = "ko";
+    let defaultFloorId = "";
+    let startPoi = null;
+    let endPoi = null;
+    let currentScale = 1;
+    let naviResponse = null;
+    let tagItem = null;
+
+    const langType = {
+      ko: "ko-KR",
+      en: "en-US",
+      CN: "zh-CN",
+      TW: "zh-TW",
+    };
+
+    const params = new URLSearchParams(window.location.search);
+    const param = params.get("enableGeoreferencing");
+
+    const defaultMapOption = Object.assign({
+      graphicLibrary: "3D",
+      camera: "2D",
+      showWaterMarker: false,
+      enablePoiCollisionTest: true,
+    });
+
+    const cssStyle = `
+            .div_container {
+                position: absolute;
+                padding: 6px;
+                background-color: #ddd;
+            }
+            .test_tag {
+                display: flex;
+                align-items: center;
+            }
+            .tag_text {
+                padding-left: 5px;
+            }
+            .tag_img {
+                width: 50px;
+                height: 50px;
+            }
+            .tag_floor,
+            .tag_title {
+                padding: 2px;
+                width: 100%;
+                height: 100%;
+                font-size: 1rem;
+                overflow: hidden;
+                color: rgb(18, 8, 40);
+            }
+            `;
+
+    // CSS 스타일 요소 생성 및 추가
+    const style = document.createElement("style");
+    style.textContent = cssStyle;
+    document.head.appendChild(style);
+
+    // HTML 문자열 정의
+    const htmlContent = `
+                <div class="test_tag">
+                    <img class="tag_img" src="https://picsum.photos/200" />
+                    <div class="tag_text">
+                        <div class="tag_title">current status</div>
+                        <div class="tag_floor">meeting room</div>
+                    </div>
+                </div>
+            `;
+
+    // HTML 요소 추가
+
+    function createTag(content) {
+      const tag = document.createElement("div");
+      tag.className = "div_container";
+      tag.innerHTML = htmlContent;
+      const button = document.createElement("button");
+      button.className = "button";
+      button.innerText = "확인";
+      button.style.pointerEvents = "all";
+      // 포인터 이벤트 비활성화
+      button.addEventListener("click", () => {
+        console.log("button click");
+      });
+      tag.appendChild(button);
+      // tag.style.width = '100px';
+      // tag.style.height = '50px';
+      // tag.style.backgroundColor = 'yellow';
+      // tag.textContent = content;
+      return tag;
+    }
+
+    async function init() {
+      mapData = await dabeeoMaps.getMapData({
+        clientId: "dav4q_ouQl1b2iWn2jBAQ3",
+        clientSecret: "be1ad0a0f9140db4d20c7a082d401013",
+        serverType: "SERVER_STUDIO4_QA_NAVI",
+      });
+
+      map = await dabeeoMaps.showMap(mapContainer, defaultMapOption, mapData);
+      map.control.setOption({
+        controlRangeOption: {
+          zoom: {
+            min: 14,
+            max: 23,
+          },
+        },
+      });
+      defaultLanguage = mapData.dataLanguage.getDefaultLanguage().lang;
+      defaultFloorId = mapData.dataMapInfo.mapInfo.defaultFloorId;
+
+      initBuildingList();
+    }
+
+    async function initTopButtonEvent() {
+      const toggleBtn = document.getElementById("contrast-toggle-btn");
+      const tagBtn = document.getElementById("tag-clear-btn");
+      const gpsBtn = document.getElementById("gps-btn");
+
+      toggleBtn.addEventListener("click", async () => {
+        isTrafficComplexityOn = !isTrafficComplexityOn;
+        toggleBtn.textContent = isTrafficComplexityOn
+          ? "통행복잡도 ON"
+          : "통행복잡도 OFF";
+
+        if (!isTrafficComplexityOn) {
+          await setMarkers();
+        } else {
+          clearMarker();
+        }
+      });
+
+      tagBtn.addEventListener("click", () => {
+        if (tagItem) {
+          map.tag.clear(tagItem.id);
+          tagItem = null;
+        }
+      });
+
+      gpsBtn.addEventListener("click", async () => {
+        const locationOption = {
+          x: 2500,
+          y: 1000,
+          iconOption: {
+            iconUrl: "https://assets.dabeeomaps.com/image/icon_mylocation.svg",
+            // width: 200,
+            // height: 200,
+            anchor: {
+              x: 0.5,
+              y: 0.5,
+            },
+          },
+          onActive: true,
+          // animate: {
+          //     color: '#00ff00',
+          //     opacity: 0.4,
+          //     desireScale: 4,
+          //     duration: 1500,
+          // },
+          gpsOption: {
+            leftCourseDistance: 25, // 경로이탈 여부 (ON_PATH 와 OUT_OF_PATH) 를 판단하는 기준 거리
+            willArriveRadius: 20, // 도착 예정 범위 반경
+            arrivedRadius: 15, // 도착 범위 반경
+          },
+        };
+
+        await map.mylocation.set(locationOption); // myLocation 생성
+        map.mylocation.start();
+      });
+    }
+
+    function initBuildingList() {
+      if (!mapData) return;
+      const listContainer = document.querySelector(".building-list-content");
+      if (!listContainer) return;
+
+      const buildingList = mapData.dataBuilding.buildings;
+      buildingList.forEach((building) => {
+        const name = building.name.find(
+          (name) => name.lang === defaultLanguage
+        );
+
+        const buildingButton = document.createElement("button");
+        if (building.defaultFloorId === defaultFloorId) {
+          buildingButton.classList.add("active");
+          selectedBuildingId = building.id;
+          selectedFloorId = building.defaultFloorId;
+          updateFloorList();
+        }
+
+        buildingButton.textContent = name.text;
+        buildingButton.addEventListener("click", async () => {
+          await map.context.changeFloor(building.defaultFloorId);
+
+          selectedBuildingId = building.id;
+          selectedFloorId = building.defaultFloorId;
+
+          updateFloorList();
+
+          const currentActive = listContainer.querySelector("button.active");
+          if (currentActive) {
+            currentActive.classList.remove("active");
+          }
+
+          buildingButton.classList.add("active");
+        });
+        listContainer.appendChild(buildingButton);
+      });
+    }
+    function updateFloorList() {
+      if (!mapData) return;
+      const listContainer = document.querySelector(".floor-list-content");
+      if (!listContainer) return;
+
+      listContainer.innerHTML = "";
+
+      const building = mapData.dataBuilding.buildings.find(
+        (building) => building.id === selectedBuildingId
+      );
+
+      building.floors.forEach((floor) => {
+        const name = floor.name.find((name) => name.lang === defaultLanguage);
+
+        const floorButton = document.createElement("button");
+        floorButton.textContent = name.text;
+
+        if (building.defaultFloorId === floor.id) {
+          floorButton.classList.add("active");
+          selectedFloorId = floor.id;
+          updatePoiList();
+        }
+        floorButton.addEventListener("click", async () => {
+          selectedFloorId = floor.id;
+          await map.context.changeFloor(floor.id);
+          updatePoiList();
+
+          const currentActive = listContainer.querySelector("button.active");
+          if (currentActive) {
+            currentActive.classList.remove("active");
+          }
+
+          floorButton.classList.add("active");
+        });
+        listContainer.appendChild(floorButton);
+      });
+    }
+    function updatePoiList() {
+      if (!mapData) return;
+      const listContainer = document.querySelector(".poi-list-content");
+      if (!listContainer) return;
+      listContainer.innerHTML = "";
+      const poiList = mapData.dataPoi.find({ floorId: selectedFloorId });
+      poiList.forEach((poi) => {
+        const name = poi.titleByLanguages.find(
+          (name) => name.lang === defaultLanguage
+        );
+        const poiButton = document.createElement("button");
+        poiButton.textContent = name.text;
+        poiButton.id = poi.id;
+
+        poiButton.addEventListener("click", () => {
+          map.pois.reset(selectedPoiId);
+
+          const currentActive = listContainer.querySelector("button.active");
+          if (currentActive) {
+            currentActive.classList.remove("active");
+          }
+          poiButton.classList.add("active");
+
+          updateSelectPoi(poi.id);
+        });
+
+        listContainer.appendChild(poiButton);
+      });
+    }
+
+    function increasePoiScale() {
+      if (!map) return;
+      currentScale += 1;
+      const updateOption = {
+        scale: currentScale,
+      };
+      map.pois.set(updateOption);
+      const value = document.querySelector(".scale");
+      value.innerHTML = currentScale;
+    }
+    function decreasePoiScale() {
+      if (!map) return;
+      currentScale -= 1;
+      const updateOption = {
+        scale: currentScale,
+      };
+      map.pois.set(updateOption);
+      const value = document.querySelector(".scale");
+      value.innerHTML = currentScale;
+    }
+
+    async function setStartPoi() {
+      if (!map || !selectedPoiId) return;
+      const findPoi = mapData.dataPoi.find({ id: selectedPoiId });
+      startPoi = findPoi ?? null;
+      if (!startPoi) return;
+      const startButton = document.querySelector(".startPoi-button");
+      const name = startPoi.titleByLanguages.find(
+        (name) => name.lang === defaultLanguage
+      );
+      startButton.innerHTML = `출발지 POI : ${name.text}`;
+
+      if (!endPoi) return;
+      // 출발지를 설정했는데 도착지가 있으면
+      naviResponse = await mapData.getRoute({
+        origin: {
+          poiId: startPoi.id,
+          floorId: startPoi.floorId,
+        },
+        destination: {
+          poiId: endPoi.id,
+          floorId: endPoi.floorId,
+        },
+        type: ["recommendation"],
+      });
+      await map.routeSimulation.set(naviResponse.recommendation, naviOption);
+      const routeDataContainer = document.querySelector(".route-data-content");
+      routeDataContainer.innerHTML = "";
+      naviResponse.recommendation.navigationList.forEach((item, i) => {
+        const routeItem = document.createElement("button");
+        let text = "";
+        const curRoute = naviResponse.recommendation.navigationList[i];
+        const nextRoute = naviResponse.recommendation.navigationList[i + 1];
+        console.log("curRoute && nextRoute", curRoute, nextRoute);
+
+        if (curRoute && nextRoute) {
+          if (
+            curRoute.buildingId !== nextRoute.buildingId &&
+            curRoute.floorId !== nextRoute.floorId
+          ) {
+            const curBuilding = mapData.dataBuilding.buildings.find(
+              (building) => building.id === curRoute.buildingId
+            );
+            const nextBuilding = mapData.dataBuilding.buildings.find(
+              (building) => building.id === nextRoute.buildingId
+            );
+            text = `건물간 이동: ${curBuilding.name[0].text} -> ${nextBuilding.name[0].text} `;
+          }
+        }
+        text += `${item.distance}m 만큼 ${item.direction}`;
+        routeItem.innerText = text;
+        routeDataContainer.appendChild(routeItem);
+      });
+    }
+    async function setEndPoi() {
+      if (!map || !selectedPoiId) return;
+      const findPoi = mapData.dataPoi.find({ id: selectedPoiId });
+      endPoi = findPoi ?? null;
+      if (!endPoi) return;
+      const endButton = document.querySelector(".endPoi-button");
+      const name = endPoi.titleByLanguages.find(
+        (name) => name.lang === defaultLanguage
+      );
+      endButton.innerHTML = `도착지 POI : ${name.text}`;
+      if (!startPoi) return;
+      // 도착지를 설정했는데 출발지가 있으면
+      naviResponse = await mapData.getRoute({
+        origin: {
+          poiId: startPoi.id,
+          floorId: startPoi.floorId,
+        },
+        destination: {
+          poiId: endPoi.id,
+          floorId: endPoi.floorId,
+        },
+        type: ["recommendation"],
+      });
+      await map.routeSimulation.set(naviResponse.recommendation, naviOption);
+
+      const routeDataContainer = document.querySelector(".route-data-content");
+      routeDataContainer.innerHTML = "";
+      naviResponse.recommendation.navigationList.forEach((item, i) => {
+        const routeItem = document.createElement("button");
+        let text = "";
+        const curRoute = naviResponse.recommendation.navigationList[i];
+        const nextRoute = naviResponse.recommendation.navigationList[i + 1];
+        console.log("curRoute && nextRoute", curRoute, nextRoute);
+
+        if (curRoute && nextRoute) {
+          if (
+            curRoute.buildingId !== nextRoute.buildingId &&
+            curRoute.floorId !== nextRoute.floorId
+          ) {
+            const curBuilding = mapData.dataBuilding.buildings.find(
+              (building) => building.id === curRoute.buildingId
+            );
+            const nextBuilding = mapData.dataBuilding.buildings.find(
+              (building) => building.id === nextRoute.buildingId
+            );
+            text = `건물간 이동: ${curBuilding.name[0].text} -> ${nextBuilding.name[0].text} `;
+          }
+        }
+        text += `${item.distance}m 만큼 ${item.direction}`;
+        routeItem.innerText = text;
+        routeDataContainer.appendChild(routeItem);
+      });
+    }
+    function startRouteSimulation() {
+      const animationOption = {
+        destOption: {
+          activeDest: true,
+          color: "#00ffff",
+          opacity: 0.5,
+          isAnimate: false,
+        },
+        zoom: 18,
+        changeFloorDelay: 2000,
+        speedRate: 50,
+      };
+
+      if (map) map.routeSimulation.start(animationOption);
+    }
+
+    const naviOption = {
+      origin: {
+        markerOptions: {
+          width: 30,
+          height: 30,
+          positionZ: 100,
+          visibleIcon: true,
+        },
+      },
+      destination: {
+        markerOptions: {
+          width: 30,
+          height: 30,
+          positionZ: 100,
+          visibleIcon: false,
+        },
+        lineOptions: {
+          lineColor: "#0000ff",
+          solidLineEnabled: true,
+          solidLineWidth: 10,
+        },
+      },
+
+      defaultLineOption: {
+        lineColor: "#0000ff",
+        solidLineEnabled: true,
+        solidLineWidth: 10,
+      }, // 기본 주행선 옵션
+      lineDivide: true,
+      lineZ: 100,
+    };
+
+    function switchActiveChild(direction = "next") {
+      const container = document.querySelector(".poi-list-content");
+      if (!container) return;
+
+      const currentActive = container.querySelector(".active");
+      if (!currentActive) {
+        const firstChild = container.firstElementChild;
+        if (!firstChild) return;
+        firstChild.classList.add("active");
+        updateSelectPoi(firstChild.id);
+        return;
+      }
+
+      // 현재 활성 요소에서 이전 또는 다음 요소 가져오기
+      const target =
+        direction === "next"
+          ? currentActive.nextElementSibling
+          : currentActive.previousElementSibling;
+
+      if (target) {
+        currentActive.classList.remove("active");
+        target.classList.add("active");
+        updateSelectPoi(target.id);
+      }
+    }
+    function handleArrowKey(event) {
+      switch (event.key) {
+        case "ArrowLeft":
+          switchActiveChild("previous");
+          break;
+        case "ArrowRight":
+          switchActiveChild("next");
+          break;
+      }
+    }
+
+    function updateSelectPoi(id) {
+      if (!map || !mapData) return;
+      map.pois.reset(selectedPoiId);
+      selectedPoiId = id;
+      const targetPoi = mapData.dataPoi.find({ id });
+      if (!targetPoi) return;
+
+      map.control.changeZoom({ zoom: 20, transition: true });
+      map.control.moveTo({
+        position: {
+          x: targetPoi.position.x,
+          y: targetPoi.position.y,
+          z: targetPoi.position.z,
+        },
+        transition: true,
+        floorId: targetPoi.floorId,
+      });
+
+      const updateOption = {
+        ids: targetPoi.id,
+        scale: 2,
+        outerColor: "blue", // 해당 POI title의 text color
+        innerColor: "blue", // 해당 POI title의 line color
+      };
+
+      map.pois.set(updateOption);
+
+      const dataContainer = document.querySelector(".poi-data-content");
+      dataContainer.innerHTML = "";
+      const poiFields = [
+        { label: "ID", value: targetPoi.id },
+        {
+          label: "TITLE",
+          value: targetPoi.titleByLanguages.find(
+            (name) => name.lang === defaultLanguage
+          ).text,
+        },
+      ];
+
+      poiFields.forEach(({ label, value }) => {
+        const wrapper = document.createElement("div");
+        wrapper.style.marginBottom = "8px";
+
+        const labelEl = document.createElement("strong");
+        labelEl.textContent = `${label}: `;
+        labelEl.style.marginRight = "4px";
+
+        const valueEl = document.createElement("span");
+        valueEl.textContent = value ?? "-";
+
+        wrapper.appendChild(labelEl);
+        wrapper.appendChild(valueEl);
+        dataContainer.appendChild(wrapper);
+      });
+
+      if (tagItem) {
+        map.tag.clear(tagItem.id);
+        tagItem = null;
+      }
+      const tag = createTag("setPOITag");
+
+      tagItem = map.tag.setPOITag({ parentId: id, pos: "TOP", tag });
+
+      console.log("poipoi", targetPoi);
+    }
+
+    async function setMarkers() {
+      markers = await map.markers.set({
+        marker: [
+          {
+            x: 4796.32,
+            y: 3198.43,
+            fixedSize: false, // marker 의 크기가 줌에 따라 항상 동일한 사이즈를 유지할 지 여부
+            iconOption: {
+              anchor: {
+                // 아이콘 중심좌표값 (default값 x:0.5,y:0 )
+                x: 0.5,
+                y: 0,
+              },
+              iconUrl: "https://picsum.photos/200", // 아이콘 이미지. url적용안할시 default로 지정된 marker image 적용
+              width: 100, // marker 아이콘 넓이값. default = marker image의 기본 width
+              height: 100, // marker 아이콘 높이값. default = marker image의 기본 height
+              visibleIcon: true, // marker를 보여줄지 말지 여부. default = true
+            },
+            textOption: {
+              lineSpacing: 10, // marker 텍스트 줄간의 간격
+              letterSpacing: 5, // marker 텍스트 간의 간격
+              color: "#00ff00", // marker 텍스트 색상
+              text: "통행량\n한적", // marker의 하단에 표시할 텍스트
+              align: "MIDDLE", // marker 텍스트 정렬
+              fontWeight: 400, // marker 텍스트 폰트 굵기
+              fontSize: 20, // marker 텍스트 폰트 사이즈
+              padding: { vertical: 10, horizontal: 10 }, // marker 텍스트 상하좌우 패딩
+              opacity: 0.5, // marker 텍스트 투명도
+              strokeStyle: {
+                color: "#ffff00", // marker 텍스트 윤곽선 색상
+                width: 2, // marker 텍스트 윤곽선 굵기
+                opacity: 0.5, // marker 텍스트 윤곽선 투명도
+              },
+              backgroundStyle: {
+                opacity: 0.5, // marker 텍스트 하이라이트 투명도
+                color: "#000000", // marker 텍스트 하이라이트 색상
+                borderRadius: 50, // marker 텍스트 하이라이트 경계면 굴곡
+              },
+            },
+          },
+
+          {
+            x: 1509.45,
+            y: 534.73,
+            fixedSize: true, // marker 의 크기가 줌에 따라 항상 동일한 사이즈를 유지할 지 여부
+            iconOption: {
+              anchor: {
+                // 아이콘 중심좌표값 (default값 x:0.5,y:0 )
+                x: 0.5,
+                y: 0,
+              },
+              iconUrl: "https://picsum.photos/200", // 아이콘 이미지. url적용안할시 default로 지정된 marker image 적용
+              width: 100, // marker 아이콘 넓이값. default = marker image의 기본 width
+              height: 100, // marker 아이콘 높이값. default = marker image의 기본 height
+              visibleIcon: true, // marker를 보여줄지 말지 여부. default = true
+            },
+            textOption: {
+              lineSpacing: 10, // marker 텍스트 줄간의 간격
+              letterSpacing: 5, // marker 텍스트 간의 간격
+              color: "#ffffff", // marker 텍스트 색상
+              text: "통행량\n혼잡", // marker의 하단에 표시할 텍스트
+              align: "MIDDLE", // marker 텍스트 정렬
+              fontWeight: 400, // marker 텍스트 폰트 굵기
+              fontSize: 20, // marker 텍스트 폰트 사이즈
+              padding: { vertical: 10, horizontal: 10 }, // marker 텍스트 상하좌우 패딩
+              opacity: 0.5, // marker 텍스트 투명도
+              strokeStyle: {
+                color: "#ffff00", // marker 텍스트 윤곽선 색상
+                width: 2, // marker 텍스트 윤곽선 굵기
+                opacity: 0.5, // marker 텍스트 윤곽선 투명도
+              },
+              backgroundStyle: {
+                opacity: 0.5, // marker 텍스트 하이라이트 투명도
+                color: "#000000", // marker 텍스트 하이라이트 색상
+                borderRadius: 50, // marker 텍스트 하이라이트 경계면 굴곡
+              },
+            },
+          },
+        ],
+      });
+
+      console.log("markers", markers);
+    }
+
+    function clearMarker() {
+      map.markers.clear(markers);
+    }
+
+    window.addEventListener("keydown", handleArrowKey);
+
+    initTopButtonEvent();
+    init();
+  </script>
+</html>
